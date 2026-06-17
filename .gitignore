@@ -1,0 +1,7 @@
+node_modules/
+*.js.map
+.DS_Store
+*.cjs
+.verify-out/
+.gstack/
+# 注意：main.js 是构建产物，但插件分发 / 在线升级需要它，故提交（不忽略）
