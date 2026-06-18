@@ -18,6 +18,7 @@
     "typescript": "^5.4.5"
   },
   "dependencies": {
+    "alasql": "^4.17.3",
     "xlsx": "^0.18.5"
   }
 }

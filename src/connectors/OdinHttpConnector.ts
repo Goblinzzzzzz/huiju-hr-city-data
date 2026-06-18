@@ -52,6 +52,15 @@ async function post(name: string, body: any, s: OdinSession, reportId: string | 
  * 用 requestUrl（Electron 网络栈，浏览器式指纹 + 系统代理），低频调用不触发反爬限流。
  * 返回 CSV 字节；交给 ExcelConnector.parseTable 解析。
  */
+/** 连接层错误 = 奥丁网关限流/封禁信号（非 HTTP 响应，requestUrl 会直接 throw）。见 recipe「限流坑」。 */
+function isGatewayBlocked(e: any): boolean {
+  const m = String(e?.message || e || "");
+  return /ERR_CONNECTION_CLOSED|ERR_CONNECTION_RESET|ERR_CONNECTION_REFUSED|ERR_EMPTY_RESPONSE|ERR_TIMED_OUT|ECONNRESET|ECONNREFUSED|ETIMEDOUT|socket hang up|net::/i.test(m);
+}
+const GATEWAY_BLOCKED_MSG =
+  "疑似被奥丁网关限流/连接层封禁（ERR_CONNECTION_CLOSED）。多由短时间内重复自动下载触发，封禁针对本机、通常 30–60 分钟自动解除。" +
+  "请稍后只刷新一次（一天一两次低频不会触发），或先在浏览器用下载按钮导出。";
+
 export async function downloadTable(s: OdinSession, tpl: CurlTemplate, dateValue?: string, log?: (m: string) => void, national?: boolean): Promise<Uint8Array> {
   const lg = log || (() => {});
   let body = tpl.body;
@@ -68,26 +77,32 @@ export async function downloadTable(s: OdinSession, tpl: CurlTemplate, dateValue
   } catch (e) { lg(`⚠️ 请求体不是合法 JSON（parseCurl 解析可能有误）: ${body.slice(0, 120)}`); }
 
   // ① 触发导出 → 拿 download_id（同步导出 is_async:0，文件即时就绪）
-  const resp = await requestUrl({
-    url: tpl.url,
-    method: "POST",
-    contentType: "application/json",
-    headers: {
-      "Accept": "application/json, text/plain, */*",
-      "Cookie": s.cookieHeader,
-      "Origin": origin,
-      "Referer": `${origin}/portal/${tpl.portalId || ""}`,
-      "env": "production",
-      "proxy_sign": "0",
-      "portal_id": tpl.portalId || "",
-      "report_id": tpl.reportId,
-      "request_id": String(Date.now()),
-      "ucid": s.ucid,
-      "x-gateway-ucid": s.ucid,
-    },
-    body,
-    throw: false,
-  });
+  let resp;
+  try {
+    resp = await requestUrl({
+      url: tpl.url,
+      method: "POST",
+      contentType: "application/json",
+      headers: {
+        "Accept": "application/json, text/plain, */*",
+        "Cookie": s.cookieHeader,
+        "Origin": origin,
+        "Referer": `${origin}/portal/${tpl.portalId || ""}`,
+        "env": "production",
+        "proxy_sign": "0",
+        "portal_id": tpl.portalId || "",
+        "report_id": tpl.reportId,
+        "request_id": String(Date.now()),
+        "ucid": s.ucid,
+        "x-gateway-ucid": s.ucid,
+      },
+      body,
+      throw: false,
+    });
+  } catch (e: any) {
+    if (isGatewayBlocked(e)) { lg(`❌ 连接被关闭（限流信号）: ${e?.message || e}`); throw new Error(GATEWAY_BLOCKED_MSG); }
+    throw e;
+  }
   const txt = resp.text || "";
   lg(`① POST odin_data_download → HTTP ${resp.status}`);
   lg("响应(全文):\n```json\n" + txt.slice(0, 2000) + (txt.length > 2000 ? "\n…(截断)" : "") + "\n```");
@@ -108,22 +123,29 @@ export async function downloadTable(s: OdinSession, tpl: CurlTemplate, dateValue
   const fileUrl = `${origin}/kegate/proxy/odin/download/common/output/any/odin_file_download?download_id=${did}`;
   const looksCsv = (b: Uint8Array) => /城市|资管|工号|大部|姓名/.test(new TextDecoder("utf-8").decode(b.slice(0, 300)));
   const getFile = async () => {
-    const f = await requestUrl({
-      url: fileUrl, method: "GET", throw: false,
-      headers: { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Cookie": s.cookieHeader, "Referer": origin + "/" },
-    });
-    return { status: f.status, bytes: new Uint8Array(f.arrayBuffer || new ArrayBuffer(0)) };
+    try {
+      const f = await requestUrl({
+        url: fileUrl, method: "GET", throw: false,
+        headers: { "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", "Cookie": s.cookieHeader, "Referer": origin + "/" },
+      });
+      return { status: f.status, bytes: new Uint8Array(f.arrayBuffer || new ArrayBuffer(0)) };
+    } catch (e: any) {
+      if (isGatewayBlocked(e)) { lg(`❌ 取文件时连接被关闭（限流信号）: ${e?.message || e}`); throw new Error(GATEWAY_BLOCKED_MSG); }
+      throw e;
+    }
   };
 
   let { status, bytes } = await getFile();
   if (isAsync && !looksCsv(bytes)) {
-    lg(`异步导出，轮询等待文件就绪（首取 ${bytes.length}B 未就绪）…`);
-    for (let i = 0; i < 40 && !looksCsv(bytes); i++) {
-      await new Promise((r) => setTimeout(r, 2500));
+    // 轮询放缓：每 6s 一次、上限 ~150s。比 2.5s×40 更像浏览器，避免触发网关连接层限流。
+    const POLL_MS = 6000, MAX_POLLS = 25;
+    lg(`异步导出，轮询等待文件就绪（首取 ${bytes.length}B 未就绪，每 ${POLL_MS / 1000}s 一次）…`);
+    for (let i = 0; i < MAX_POLLS && !looksCsv(bytes); i++) {
+      await new Promise((r) => setTimeout(r, POLL_MS));
       ({ status, bytes } = await getFile());
-      if (i % 4 === 3) lg(`  轮询 ${(i + 1) * 2.5}s… 当前 ${bytes.length}B`);
+      if (i % 3 === 2) lg(`  轮询 ${((i + 1) * POLL_MS) / 1000}s… 当前 ${bytes.length}B`);
     }
-    if (!looksCsv(bytes)) throw new Error(`异步导出超时(~100s 文件未就绪) download_id=${did}`);
+    if (!looksCsv(bytes)) throw new Error(`异步导出超时(~${(MAX_POLLS * POLL_MS) / 1000}s 文件未就绪) download_id=${did}`);
     lg(`异步就绪: ${bytes.length}B`);
   }
   const head = new TextDecoder("utf-8").decode(bytes.slice(0, 200));

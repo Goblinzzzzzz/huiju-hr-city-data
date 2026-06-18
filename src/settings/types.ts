@@ -1,6 +1,13 @@
+import type { TenantCompute } from "../model/canonical";
+import type { SqlConfig } from "../transforms/sql";
+
 export interface HjSettings {
   /** 默认进入的城市(租户) id */
   defaultTenant: string;
+  /** 各租户口径配置（cityFilter/districts/excelColumns/incentiveTargets）。空={}→该租户回退内置默认(SAMPLE_CONFIG) */
+  calibers: Record<string, TenantCompute>;
+  /** 各租户 SQL 口径（对已下载表跑 SQL）。空={}→该租户回退 DEFAULT_SQL(enabled=false，纯透传) */
+  sqlCalibers: Record<string, SqlConfig>;
   /** 在线升级清单 URL（update.json） */
   updateUrl: string;
   /** 线下数据投递目录（建议放 vault 外/排除同步，避免 HR 数据随 iCloud 流转） */
@@ -25,6 +32,8 @@ export interface HjSettings {
 
 export const DEFAULT_SETTINGS: HjSettings = {
   defaultTenant: "wuhan",
+  calibers: {}, // 空：各租户回退 SAMPLE_CONFIG；用户在「口径配置」保存后落 data.json
+  sqlCalibers: {}, // 空：各租户回退 DEFAULT_SQL（关闭，纯透传）
   updateUrl: "https://raw.githubusercontent.com/Goblinzzzzzz/huiju-hr-city-data/main", // 在线升级源（GitHub raw 主分支）
   inboxPath: "",
   webhookUrl: "",

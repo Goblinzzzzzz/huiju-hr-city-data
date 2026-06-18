@@ -8,7 +8,8 @@ import { computeTier } from "../reports/tier/compute";
 import { exportTierHtml, type TrendEntry } from "../reports/tier/exportHtml";
 import { buildKpiMarkdown, pushWeChat } from "../push/wechat";
 import { SAMPLE_EXCEL, SAMPLE_CSV, SAMPLE_ROSTER, SAMPLE_CONFIG } from "../reports/tier/sample";
-import type { TierViewData } from "../model/canonical";
+import { runSql, validateSql, DEFAULT_SQL, type SqlConfig } from "../transforms/sql";
+import type { TierViewData, TenantCompute as TierConfig } from "../model/canonical";
 
 export const VIEW_TYPE = "huiju-workbench";
 
@@ -23,6 +24,47 @@ export class WorkbenchView extends ItemView {
   private computed: TierViewData | null = null;
   private lastStatus: LoadResult["status"] | null = null;
   private logBuf: string[] = [];
+  private caliberDraft!: TierConfig; // 口径配置草稿（表单/JSON 共同编辑，保存后落 data.json）
+  private sqlDraft!: SqlConfig; // SQL 口径草稿
+
+  /** 当前租户已保存的 SQL 口径（深拷贝）；无则回退 DEFAULT_SQL。 */
+  private sqlConfig(): SqlConfig {
+    const stored = this.plugin.settings.sqlCalibers?.[this.tenant];
+    return { ...DEFAULT_SQL, ...(stored || {}) };
+  }
+
+  // ===== 口径配置（caliber）=====
+  /** 当前租户已保存的口径（深拷贝）；无则回退内置默认 SAMPLE_CONFIG。 */
+  private caliber(): TierConfig {
+    const stored = this.plugin.settings.calibers?.[this.tenant];
+    return this.cloneCaliber(stored || SAMPLE_CONFIG);
+  }
+  private cloneCaliber(c: TierConfig): TierConfig {
+    return {
+      cityFilter: c.cityFilter,
+      districts: [...c.districts],
+      incentiveTargets: { ...c.incentiveTargets },
+      excelColumns: { ...c.excelColumns },
+    };
+  }
+  private esc(s: any): string {
+    return String(s ?? "").replace(/[&<>"]/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[ch]!));
+  }
+  /** 校验口径对象；返回错误信息字符串，合法则 null。 */
+  private validateCaliber(c: any): string | null {
+    if (!c || typeof c !== "object") return "配置不是对象";
+    if (!c.cityFilter || typeof c.cityFilter !== "string") return "cityFilter 必须是非空字符串";
+    if (!Array.isArray(c.districts) || c.districts.length === 0) return "districts 必须是非空数组";
+    if (c.districts.some((d: any) => typeof d !== "string" || !d.trim())) return "districts 含空项";
+    const ex = c.excelColumns, keys = ["id", "name", "district", "area", "mayRate", "mayCumulative"];
+    if (!ex || keys.some((k) => !Number.isInteger(ex[k]) || ex[k] < 0)) return `excelColumns 六字段须为 ≥0 整数（${keys.join("/")}）`;
+    if (!c.incentiveTargets || typeof c.incentiveTargets !== "object") return "incentiveTargets 必须是对象";
+    for (const k of Object.keys(c.incentiveTargets)) {
+      const v = c.incentiveTargets[k];
+      if (typeof v !== "number" || !isFinite(v) || v < 0) return `incentiveTargets.${k} 必须是 ≥0 的数`;
+    }
+    return null;
+  }
 
   private dlog(msg: string) {
     const d = new Date();
@@ -61,6 +103,8 @@ export class WorkbenchView extends ItemView {
     const root = this.contentEl;
     root.empty();
     root.addClass("hj-leaf");
+    this.caliberDraft = this.caliber();
+    this.sqlDraft = this.sqlConfig();
     root.innerHTML = this.markup();
     this.wire(root);
     this.renderSources();
@@ -255,9 +299,25 @@ export class WorkbenchView extends ItemView {
     this.dlog(`刷新开始 · 租户=${this.tenant}`);
     const load = await this.loadData();
     this.dlog(`数据来源: ${load.status.usedOdin ? "奥丁直连" : load.status.usedSample ? "内置样例" : "线下文件"}`);
-    const cfg = SAMPLE_CONFIG; // M4 起改为读 tenants/<city>/caliber.json
+    const cfg = this.caliber(); // 读已保存口径（settings.calibers[tenant]），无则回退 SAMPLE_CONFIG
+    this.dlog(`口径: 城市=${cfg.cityFilter} 大区=[${cfg.districts.join("/")}] 激励=${JSON.stringify(cfg.incentiveTargets)}${this.plugin.settings.calibers?.[this.tenant] ? "" : "（内置默认）"}`);
+
+    // SQL 口径（可选）：对已下载表跑 SQL，结果按原表头重投影后喂给 compute；出错回退原表
+    let { excelRows, csvRows, rosterRows } = load;
+    const sql = this.sqlConfig();
+    if (sql.enabled) {
+      try {
+        const r = runSql({ detail: load.csvRows, roster: load.rosterRows, baseline: load.excelRows }, sql);
+        csvRows = r.rows.detail; rosterRows = r.rows.roster; excelRows = r.rows.baseline;
+        this.dlog("### SQL 口径已应用"); r.log.forEach((m) => this.dlog(m));
+      } catch (e: any) {
+        this.dlog(`❌ SQL 口径执行失败，回退原始表: ${e?.message || e}`);
+        new Notice("SQL 口径执行失败，已用原始表：" + (e?.message || e));
+      }
+    }
+
     this.computed = computeTier({
-      excelRows: load.excelRows, csvRows: load.csvRows, rosterRows: load.rosterRows,
+      excelRows, csvRows, rosterRows,
       config: cfg, monthPrefix: this.monthPrefix(), now: Date.now(),
     });
     this.lastStatus = load.status;
@@ -419,6 +479,49 @@ export class WorkbenchView extends ItemView {
     el.innerHTML = `<span class="hjdot ${sample ? "warn" : ""}"></span><span class="fxt">${sample ? "样例数据" : "已刷新"} · 在岗${this.computed.counts.onjob}</span>`;
   }
 
+  private calChipsHtml(): string {
+    return this.caliberDraft.districts
+      .map((d, i) => `<span class="chip">${this.esc(d)} <button data-act="dist-del" data-i="${i}">×</button></span>`)
+      .join("");
+  }
+  private calIncHtml(): string {
+    const c = this.caliberDraft;
+    return c.districts
+      .map((d) => `<div class="kv"><span class="chip">${this.esc(d)}</span><input class="input" data-inc="${this.esc(d)}" type="number" value="${c.incentiveTargets[d] ?? 0}"></div>`)
+      .join("");
+  }
+  /** 口径「可视化」表单 HTML（从 caliberDraft 渲染，可重建）。 */
+  private calFormInner(): string {
+    const c = this.caliberDraft, ex = c.excelColumns;
+    const col = (key: string, label: string) => `<div class="maprow"><span>${label}</span><input class="input" data-col="${key}" type="number" value="${(ex as any)[key]}"></div>`;
+    return `
+        <div class="subhead">城市与组织</div>
+        <div class="field"><label>城市筛选 <span class="desc">cityFilter</span></label><input class="input" data-cf="cityFilter" value="${this.esc(c.cityFilter)}"></div>
+        <div class="field"><label>大区列表</label><div class="chips" id="calDist">${this.calChipsHtml()}</div>
+          <div style="margin-top:6px;display:flex;gap:6px"><input class="input" id="calNewDist" placeholder="新增大区名" style="max-width:160px"><button class="btn sm" data-act="dist-add">＋ 添加</button></div></div>
+        <div class="subhead">Excel 列映射 <span class="desc">列号从 0 起</span></div>
+        ${col("id", "工号 id")}${col("name", "姓名 name")}${col("district", "大区 district")}${col("area", "区域 area")}${col("mayRate", "5月达成率 mayRate")}${col("mayCumulative", "5月累计 mayCumulative")}
+        <div class="note">⚠️ 用达成率(mayRate=Col12)算档位，不要用 Col13/14 文字标签。</div>
+        <div class="subhead">激励目标 <span class="desc">每大区目标人数</span></div>
+        <div id="calInc">${this.calIncHtml()}</div>`;
+  }
+
+  /** 口径「SQL」面板 HTML（从 sqlDraft 渲染）。 */
+  private calSqlInner(): string {
+    const s = this.sqlDraft;
+    const ta = (key: string, label: string, hint: string) => `
+        <div class="field"><label>${label} <span class="desc">表名 ${key}</span></label>
+          <textarea class="json" data-sql="${key}" spellcheck="false" style="width:100%;min-height:64px;resize:vertical">${this.esc(s[key as keyof SqlConfig] as string)}</textarea>
+          <div class="note">${hint}</div></div>`;
+    return `
+        <label class="radio" style="margin-bottom:10px"><input type="checkbox" data-sql-enabled ${s.enabled ? "checked" : ""}> 启用 SQL 口径（对已下载表跑 SQL 后再计算）</label>
+        <div class="note" style="margin-bottom:12px">可用表：<code>detail</code>(资管明细) · <code>roster</code>(花名册) · <code>baseline</code>(5月基准)。列名=各表表头中文名，用反引号包裹，如 <code>\`城市\`</code>。
+          <b>务必保留全部列</b>（<code>SELECT *</code> 或 <code>detail.*</code>）——计算按列号读取，改列形状/聚合会破坏口径。⚠️ 对 <code>detail</code> 过滤会同时影响「全国城市排名」（该模块用全部行）。</div>
+        ${ta("detail", "资管明细 SQL", "如：SELECT * FROM detail WHERE `城市` = '武汉'")}
+        ${ta("roster", "花名册 SQL", "如：SELECT * FROM roster")}
+        ${ta("baseline", "5月基准 SQL", "如：SELECT * FROM baseline")}`;
+  }
+
   // ===== 静态骨架 =====
   private markup(): string {
     const tenant = this.tenant === "wuhan" ? "惠居武汉" : this.tenant;
@@ -450,24 +553,18 @@ export class WorkbenchView extends ItemView {
     </section>
     <section class="panel" data-p="cal">
       <div class="shead"><h2>口径配置</h2><p>可视化表单为主 · 高级可改 JSON</p></div>
-      <div class="seg" data-seg="cal"><button class="on" data-c="form">可视化</button><button data-c="json">JSON</button><button data-c="sql" disabled title="规划中">SQL（即将支持）</button></div>
-      <div data-cal="form" style="margin-top:14px">
-        <div class="subhead">城市与组织</div>
-        <div class="field"><label>城市筛选 <span class="desc">cityFilter</span></label><input class="input" value="武汉"></div>
-        <div class="field"><label>大区列表</label><div class="chips"><span class="chip">汉口 <button>×</button></span><span class="chip">武昌 <button>×</button></span><span class="chip">汉阳 <button>×</button></span><span class="chip add">＋ 添加</span></div></div>
-        <div class="subhead">Excel 列映射</div>
-        <div class="maprow"><span>工号</span><input class="input" value="3"></div>
-        <div class="maprow"><span>5月达成率</span><input class="input" value="12"></div>
-        <div class="maprow"><span>5月累计</span><input class="input" value="11"></div>
-        <div class="note">⚠️ 用达成率(Col12)算档位，不要用 Col13/14 文字标签。</div>
-        <div class="subhead">激励目标</div>
-        <div class="kv"><span class="chip">汉口</span><input class="input" value="12"></div>
-        <div class="kv"><span class="chip">武昌</span><input class="input" value="17"></div>
-        <div class="kv"><span class="chip">汉阳</span><input class="input" value="11"></div>
+      <div class="seg" data-seg="cal"><button class="on" data-c="form">可视化</button><button data-c="json">JSON</button><button data-c="sql">SQL</button></div>
+      <div data-cal="form" style="margin-top:14px" id="calForm">${this.calFormInner()}</div>
+      <div data-cal="json" style="display:none;margin-top:14px">
+        <textarea class="json" id="calJson" spellcheck="false" style="width:100%;min-height:240px;resize:vertical">${this.esc(JSON.stringify(this.caliberDraft, null, 2))}</textarea>
+        <div class="note">字段：cityFilter / districts[] / excelColumns{id,name,district,area,mayRate,mayCumulative} / incentiveTargets{}。编辑后点「保存口径」。</div>
       </div>
-      <div data-cal="json" style="display:none;margin-top:14px"><div class="json">{ "cityFilter":"武汉", "districts":["汉口","武昌","汉阳"],
-  "excelColumns":{"id":3,"mayRate":12,"mayCumulative":11},
-  "incentiveTargets":{"汉口":12,"武昌":17,"汉阳":11} }</div></div>
+      <div data-cal="sql" style="display:none;margin-top:14px" id="calSql">${this.calSqlInner()}</div>
+      <div style="margin-top:16px;display:flex;gap:8px">
+        <button class="btn primary" data-act="cal-save">保存口径</button>
+        <button class="btn" data-act="cal-reset">重置为默认</button>
+        <span class="note" style="align-self:center">保存后点右上角「刷新数据」生效</span>
+      </div>
     </section>
     <section class="panel" data-p="run">
       <div class="shead"><h2>运行与校验</h2><p>取数 → 建模 → 校验，不过不发</p></div>
@@ -517,27 +614,114 @@ export class WorkbenchView extends ItemView {
     );
     root.querySelectorAll<HTMLElement>('[data-seg="cal"] button:not([disabled])').forEach((b) =>
       b.addEventListener("click", () => {
+        const to = b.dataset.c!;
+        const cur = (root.querySelector('[data-seg="cal"] button.on') as HTMLElement)?.dataset.c;
+        if (cur === to) return;
+        const ta = root.querySelector("#calJson") as HTMLTextAreaElement | null;
+        // ① 提交当前 tab 到草稿（form/sql 已由 input 监听实时同步；仅 JSON 需在此解析）
+        if (cur === "json" && ta) {
+          let parsed: any;
+          try { parsed = JSON.parse(ta.value); } catch { new Notice("JSON 解析失败，请检查格式"); return; }
+          const err = this.validateCaliber(parsed);
+          if (err) { new Notice("口径无效：" + err); return; }
+          this.caliberDraft = this.cloneCaliber(parsed);
+        }
+        // ② 加载目标 tab（从草稿重建）
+        if (to === "json" && ta) ta.value = JSON.stringify(this.caliberDraft, null, 2);
+        if (to === "form") { const fc = root.querySelector("#calForm"); if (fc) fc.innerHTML = this.calFormInner(); }
+        // ③ 切换显隐
         root.querySelectorAll('[data-seg="cal"] button').forEach((x) => x.removeClass("on"));
         b.addClass("on");
-        (root.querySelector('[data-cal="form"]') as HTMLElement).style.display = b.dataset.c === "form" ? "" : "none";
-        (root.querySelector('[data-cal="json"]') as HTMLElement).style.display = b.dataset.c === "json" ? "" : "none";
+        (root.querySelector('[data-cal="form"]') as HTMLElement).style.display = to === "form" ? "" : "none";
+        (root.querySelector('[data-cal="json"]') as HTMLElement).style.display = to === "json" ? "" : "none";
+        (root.querySelector('[data-cal="sql"]') as HTMLElement).style.display = to === "sql" ? "" : "none";
       })
     );
+    // 口径表单/SQL 输入 → 实时更新草稿
+    root.querySelector('[data-p="cal"]')?.addEventListener("input", (e) => {
+      const t = e.target as HTMLInputElement, c = this.caliberDraft;
+      if (t.dataset.cf === "cityFilter") c.cityFilter = t.value;
+      else if (t.dataset.col) (c.excelColumns as any)[t.dataset.col] = parseInt(t.value, 10) || 0;
+      else if (t.dataset.inc) c.incentiveTargets[t.dataset.inc] = parseFloat(t.value) || 0;
+      else if (t.dataset.sql) (this.sqlDraft as any)[t.dataset.sql] = t.value;
+      else if (t.hasAttribute("data-sql-enabled")) this.sqlDraft.enabled = t.checked;
+    });
     // 事件委托：静态 + 动态渲染的 [data-act] 按钮都生效
     this.contentEl.addEventListener("click", (e) => {
       const b = (e.target as HTMLElement).closest("[data-act]") as HTMLElement | null;
-      if (b) this.handleAct(b.dataset.act!);
+      if (b) this.handleAct(b.dataset.act!, b);
     });
   }
 
-  private handleAct(act: string) {
+  private handleAct(act: string, el?: HTMLElement) {
     switch (act) {
       case "refresh": case "run": this.refresh(); break;
       case "generate": this.generate(); break;
       case "odin": this.scrapeOdin(); break;
       case "push": this.previewPush(); break;
       case "tenant": new Notice("切换城市（M4 多租户接入）"); break;
+      case "dist-add": this.calAddDist(); break;
+      case "dist-del": this.calDelDist(parseInt(el?.dataset.i || "-1", 10)); break;
+      case "cal-save": this.calSave(); break;
+      case "cal-reset": this.calReset(); break;
     }
+  }
+
+  // ===== 口径配置交互 =====
+  private rerenderCalDynamic() {
+    const distEl = this.contentEl.querySelector("#calDist");
+    const incEl = this.contentEl.querySelector("#calInc");
+    if (distEl) distEl.innerHTML = this.calChipsHtml();
+    if (incEl) incEl.innerHTML = this.calIncHtml();
+  }
+  private calAddDist() {
+    const input = this.contentEl.querySelector("#calNewDist") as HTMLInputElement | null;
+    const name = (input?.value || "").trim();
+    if (!name) { new Notice("请输入大区名"); return; }
+    if (this.caliberDraft.districts.includes(name)) { new Notice("该大区已存在"); return; }
+    this.caliberDraft.districts.push(name);
+    if (this.caliberDraft.incentiveTargets[name] == null) this.caliberDraft.incentiveTargets[name] = 0;
+    if (input) input.value = "";
+    this.rerenderCalDynamic();
+  }
+  private calDelDist(i: number) {
+    const ds = this.caliberDraft.districts;
+    if (i < 0 || i >= ds.length) return;
+    const [removed] = ds.splice(i, 1);
+    delete this.caliberDraft.incentiveTargets[removed];
+    this.rerenderCalDynamic();
+  }
+  private async calSave() {
+    const jsonVisible = (this.contentEl.querySelector('[data-cal="json"]') as HTMLElement)?.style.display !== "none";
+    if (jsonVisible) {
+      const ta = this.contentEl.querySelector("#calJson") as HTMLTextAreaElement | null;
+      let parsed: any;
+      try { parsed = JSON.parse(ta?.value || ""); } catch { new Notice("JSON 解析失败，请检查格式"); return; }
+      const err = this.validateCaliber(parsed);
+      if (err) { new Notice("口径无效：" + err); return; }
+      this.caliberDraft = this.cloneCaliber(parsed);
+    } else {
+      const err = this.validateCaliber(this.caliberDraft);
+      if (err) { new Notice("口径无效：" + err); return; }
+    }
+    const sqlErr = validateSql(this.sqlDraft);
+    if (sqlErr) { new Notice("SQL 口径无效：" + sqlErr); return; }
+    if (!this.plugin.settings.calibers) this.plugin.settings.calibers = {};
+    if (!this.plugin.settings.sqlCalibers) this.plugin.settings.sqlCalibers = {};
+    this.plugin.settings.calibers[this.tenant] = this.cloneCaliber(this.caliberDraft);
+    this.plugin.settings.sqlCalibers[this.tenant] = { ...this.sqlDraft };
+    await this.plugin.saveSettings();
+    this.computed = null; // 失效旧计算，下次刷新用新口径
+    new Notice(`口径已保存（${this.tenant}${this.sqlDraft.enabled ? " · SQL 已启用" : ""}）。点「刷新数据」生效。`);
+  }
+  private calReset() {
+    this.caliberDraft = this.cloneCaliber(SAMPLE_CONFIG);
+    this.sqlDraft = { ...DEFAULT_SQL };
+    const fc = this.contentEl.querySelector("#calForm"); if (fc) fc.innerHTML = this.calFormInner();
+    const sq = this.contentEl.querySelector("#calSql"); if (sq) sq.innerHTML = this.calSqlInner();
+    const ta = this.contentEl.querySelector("#calJson") as HTMLTextAreaElement | null;
+    if (ta) ta.value = JSON.stringify(this.caliberDraft, null, 2);
+    new Notice("已重置为内置默认口径 + SQL 关闭（未保存，点「保存口径」落盘）");
   }
 
   private async previewPush() {
