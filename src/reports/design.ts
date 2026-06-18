@@ -132,6 +132,15 @@ body{font-family:var(--font-sans);background:var(--canvas);color:var(--ink-700);
 .region-rate{font-size:26px;font-weight:700;line-height:1.1}
 .region-rate small{font-size:12px;font-weight:400;opacity:.85;margin-left:6px}
 .region-sub{font-size:12px;opacity:.92;margin-top:3px}
+/* 升降级分析名单 */
+.region-notes{padding:11px 14px;border-top:1px solid var(--line-100);display:flex;flex-direction:column;gap:6px;background:var(--brand-050)}
+.region-notes .rn{font-size:11.5px;line-height:1.55}
+.region-notes .ok{color:var(--pos-700)}
+.region-notes .warn{color:var(--warn-700)}
+.region-notes .crit{color:var(--brand-600)}
+.region-notes .low{color:var(--neg-700)}
+/* 可悬停看个人明细的单元格 */
+.dt td.hint{cursor:help;text-decoration:underline dotted var(--ink-400);text-underline-offset:3px}
 
 /* 空态 / 骨架（占位项目） */
 .empty{text-align:center;padding:30px 20px;color:var(--ink-400)}

@@ -1,5 +1,5 @@
 // 年标准人效达标率 — 面板渲染（7 模块），用新设计系统组件。数据字段不变（口径冻结）。
-import { TierViewData, OverviewRow } from "../../model/canonical";
+import { TierViewData, OverviewRow, Person } from "../../model/canonical";
 import { TIERS, GROWTH_TIERS } from "../../transforms/tier";
 import { esc, f1, sectionCard, statCard, dataTable, statusTag, progressBar, tierChip, emptyState } from "../components";
 
@@ -15,19 +15,52 @@ const tierColor = (t: string) => TIER_COLORS[Math.max(0, TIERS.indexOf(t))] || "
 const chg = (c: string) => c === "↑升" ? `<span class="pos">↑升</span>` : c === "↓降" ? `<span class="neg">↓降</span>` : `<span class="dim">—</span>`;
 const deltaPP = (cur: number, base: number) => { const v = f1(cur - base); return v > 0 ? `<span class="pos">▲ +${v}pp</span>` : v < 0 ? `<span class="neg">▼ ${v}pp</span>` : `<span class="dim">—</span>`; };
 
-/** 9 列流动表（总览 + 大区共用）。 */
-function flowTable(rows: OverviewRow[]): string {
+/** 一个人的悬停明细行：姓名，X套，5月达成率→当前达成率。 */
+const personTip = (p: Person) => `${p.name}，${f1(p.weighted)}套，${f1(p.mayRate)}%→${f1(p.rate)}%`;
+
+/** 9 列流动表（总览 + 大区共用）。传 persons 则升级/降级/离职/升入/降入单元格挂个人明细 title（悬停可见）。 */
+function flowTable(rows: OverviewRow[], persons?: Person[]): string {
   const head = `<tr><th>档位</th><th>5月</th><th>↑升级</th><th>↓降级</th><th>→离职</th><th>←升入</th><th>←降入</th><th>6月</th><th>变化</th></tr>`;
-  const cell = (r: OverviewRow) =>
-    `<td style="text-align:left">${tierChip(r.tier, tierColor(r.tier))}</td><td class="num">${r.may}</td>` +
-    `<td class="num ${r.up ? "pos" : "dim"}">${r.up || "—"}</td><td class="num ${r.down ? "neg" : "dim"}">${r.down || "—"}</td>` +
-    `<td class="num ${r.lost ? "lost" : "dim"}">${r.lost || "—"}</td><td class="num ${r.upIn ? "pos" : "dim"}">${r.upIn || "—"}</td>` +
-    `<td class="num ${r.downIn ? "neg" : "dim"}">${r.downIn || "—"}</td><td class="num"><b>${r.june}</b></td>` +
-    `<td class="num ${r.change > 0 ? "pos" : r.change < 0 ? "neg" : "dim"}">${r.change > 0 ? "+" + r.change : r.change || "—"}</td>`;
+  // 流动单元格：有人数则挂 title（多行个人明细）+ hint 样式
+  const mcell = (val: number, cls: string, pred: (p: Person) => boolean) => {
+    if (!val) return `<td class="num dim">—</td>`;
+    const tip = persons ? persons.filter(pred).map(personTip).join("\n") : "";
+    return tip ? `<td class="num ${cls} hint" title="${esc(tip)}">${val}</td>` : `<td class="num ${cls}">${val}</td>`;
+  };
+  const cell = (r: OverviewRow) => {
+    const t = r.tier;
+    return `<td style="text-align:left">${tierChip(t, tierColor(t))}</td><td class="num">${r.may}</td>` +
+      mcell(r.up, "pos", (p) => p.mayTier === t && p.tierChange === "↑升") +
+      mcell(r.down, "neg", (p) => p.mayTier === t && p.tierChange === "↓降") +
+      mcell(r.lost, "lost", (p) => p.mayTier === t && p.roster === "离职") +
+      mcell(r.upIn, "pos", (p) => p.currentTier === t && p.tierChange === "↑升") +
+      mcell(r.downIn, "neg", (p) => p.currentTier === t && p.tierChange === "↓降") +
+      `<td class="num"><b>${r.june}</b></td>` +
+      `<td class="num ${r.change > 0 ? "pos" : r.change < 0 ? "neg" : "dim"}">${r.change > 0 ? "+" + r.change : r.change || "—"}</td>`;
+  };
   const body = rows.map((r) => `<tr>${cell(r)}</tr>`).join("");
   const sum = (k: keyof OverviewRow) => rows.reduce((s, r) => s + (r[k] as number), 0);
   const tot = `<tr class="total"><td style="text-align:left">合计</td><td class="num">${sum("may")}</td><td class="num">${sum("up")}</td><td class="num">${sum("down")}</td><td class="num">${sum("lost")}</td><td class="num">${sum("upIn")}</td><td class="num">${sum("downIn")}</td><td class="num">${sum("june")}</td><td class="num">${sum("change")}</td></tr>`;
   return dataTable(head, body + tot);
+}
+
+/** 大区升降级分析名单：升档 / 降档(按5月档位拆解) / 临界达标(差≤3套) / 潜力<50。 */
+function regionNotes(name: string, persons: Person[]): string {
+  const onjob = persons.filter((p) => p.dabu === name && p.roster === "在职");
+  const names = (ps: Person[]) => ps.map((p) => esc(p.name)).join("、");
+  const up = onjob.filter((p) => p.tierChange === "↑升");
+  const down = onjob.filter((p) => p.tierChange === "↓降");
+  const crit = onjob.filter((p) => !p.pass && p.diff <= 3).sort((a, b) => a.diff - b.diff);
+  const low = onjob.filter((p) => p.currentTier === "潜力<50");
+  const parts: string[] = [];
+  if (up.length) parts.push(`<div class="rn ok">✅ 升档 ${up.length} 人：${names(up)}</div>`);
+  if (down.length) {
+    const grp = TIERS.map((t) => { const n = down.filter((p) => p.mayTier === t).length; return n ? `${t}降${n}人` : ""; }).filter(Boolean).join("、");
+    parts.push(`<div class="rn warn">⚠️ 降档 ${down.length} 人（${grp}）：${names(down)}</div>`);
+  }
+  if (crit.length) parts.push(`<div class="rn crit">◆ 临界达标 ${crit.length} 人（差≤3套）：${crit.map((p) => `${esc(p.name)}(差${f1(p.diff)}套)`).join("、")}</div>`);
+  if (low.length) parts.push(`<div class="rn low">▼ 潜力&lt;50 共 ${low.length} 人：${names(low)}</div>`);
+  return parts.length ? `<div class="region-notes">${parts.join("")}</div>` : "";
 }
 
 export function renderTierPanel(d: TierViewData, opts: { trend?: TrendEntry[] }): string {
@@ -78,14 +111,15 @@ export function renderTierPanel(d: TierViewData, opts: { trend?: TrendEntry[] })
   out.push(sectionCard("6月激励方案跟进", incBody, { id: "m-inc" }));
 
   // ④ 档位健康度总览
-  out.push(sectionCard(`档位健康度总览`, flowTable(d.overview), { id: "m-overview", meta: `5月基准 ${d.overview.reduce((s, r) => s + r.may, 0)}人 → 6月在岗 ${d.overview.reduce((s, r) => s + r.june, 0)}人` }));
+  out.push(sectionCard(`档位健康度总览`, flowTable(d.overview, d.persons), { id: "m-overview", meta: `5月基准 ${d.overview.reduce((s, r) => s + r.may, 0)}人 → 6月在岗 ${d.overview.reduce((s, r) => s + r.june, 0)}人 · 悬停升降单元格看名单` }));
 
   // ⑤ 大区管理重点
   const regions = d.dabuCards.map((c) => {
     const may = d.mayBaseline.dabuRates[c.name];
     const cmp = may != null ? ` ${deltaPP(c.rate, may)}` : "";
     const warn = c.rate < 25 ? " warn" : "";
-    return `<div class="region"><div class="region-head${warn}"><div class="region-name">${esc(c.name)}大区</div><div class="region-rate">${c.rate}%<small>${may != null ? "5月 " + may + "%" : ""}</small></div><div class="region-sub">↑${c.up}升 ↓${c.down}降 →${c.lost}离职${cmp}</div></div>${flowTable(c.rows)}</div>`;
+    const rp = d.persons.filter((p) => p.dabu === c.name);
+    return `<div class="region"><div class="region-head${warn}"><div class="region-name">${esc(c.name)}大区</div><div class="region-rate">${c.rate}%<small>${may != null ? "5月 " + may + "%" : ""}</small></div><div class="region-sub">↑${c.up}升 ↓${c.down}降 →${c.lost}离职${cmp}</div></div>${flowTable(c.rows, rp)}${regionNotes(c.name, d.persons)}</div>`;
   }).join("");
   out.push(sectionCard("大区管理重点", `<div class="region-cards">${regions}</div>`, { id: "m-region", flush: false }));
 
