@@ -540,9 +540,10 @@ export class WorkbenchView extends ItemView {
     }
   }
 
-  private previewPush() {
+  private async previewPush() {
     if (!this.computed) { new Notice("请先刷新数据"); return; }
-    const md = buildKpiMarkdown(this.computed, "惠居" + this.tenant);
+    const trend = await this.buildTrend(this.computed);
+    const md = buildKpiMarkdown(this.computed, "惠居" + this.tenant, trend);
     new PushPreviewModal(this.app, md, async () => {
       const hook = this.plugin.settings.webhookUrl;
       if (!hook) { new Notice("请先在设置填写企微 Webhook"); return; }
