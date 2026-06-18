@@ -450,11 +450,15 @@ export class WorkbenchView extends ItemView {
       const auto = s.usedOdin;
       const card = (title: string, st: SrcStat, miss: string) =>
         this.srcCard(title, auto ? "auto" : "manual", st.found ? "ok" : "bad", st.found ? `已载入 ${st.rows} 行` : "缺失",
-          st.found ? st.name : miss, st.found ? (auto ? "奥丁直连" : `${this.inboxDir}/`) : "", st.found ? [auto ? "重新抓取" : "重新解析"] : ["选择文件夹"]);
-      if (s.usedOdin) html += `<div class="note" style="margin:10px 0">当前看板数据来自<b>奥丁直连</b>（按列映射构建）。</div>`;
+          st.found ? st.name : miss, st.found ? (auto ? "奥丁直连" : `${this.inboxDir}/`) : "",
+          st.found ? [{ label: auto ? "重新抓取" : "重新解析", act: "refresh" }] : [{ label: "导入文件", act: "import-file" }]);
+      if (s.usedOdin) html += `<div class="note" style="margin:10px 0">当前看板数据来自<b>奥丁直连</b>（按列映射构建）。5月基准始终为手动导入的 xlsx。</div>`;
       else if (s.usedSample) html += `<div class="note" style="margin:10px 0">未找到完整三件套，已载入内置样例演示。放入真实文件后再次刷新即生效。</div>`;
       html += card(auto ? "奥丁 · 资管明细" : "线下 · 资管明细 CSV", s.csv, "请放入 *.csv");
-      html += card(auto ? "奥丁 · 5月基准" : "线下 · 5月基准 XLSX", s.excel, "请放入 *.xlsx");
+      // 5月基准始终手动（奥丁不提供），故固定 manual + 导入按钮
+      html += this.srcCard("5月基准 XLSX（手动上传）", "manual", s.excel.found ? "ok" : "bad",
+        s.excel.found ? `已载入 ${s.excel.rows} 行` : "缺失", s.excel.found ? s.excel.name : "请导入 *.xlsx",
+        `${this.inboxDir}/`, [{ label: s.excel.found ? "重新导入" : "导入文件", act: "import-file" }]);
       html += card(auto ? "奥丁 · 花名册" : "线下 · 花名册 CSV", s.roster, "请放入 *花名册*.csv");
     }
     html += `<button class="dashed">＋ 添加数据源</button>`;
@@ -591,10 +595,10 @@ export class WorkbenchView extends ItemView {
 </div>`;
   }
 
-  private srcCard(name: string, kind: "auto" | "manual", st: "ok" | "warn" | "bad", stTxt: string, meta: string, code: string, acts: string[]): string {
+  private srcCard(name: string, kind: "auto" | "manual", st: "ok" | "warn" | "bad", stTxt: string, meta: string, code: string, acts: Array<{ label: string; act?: string }>): string {
     const dotcls = st === "ok" ? "" : st === "warn" ? "warn" : "bad";
     const codeHtml = code ? `<code>${code}</code>` : "";
-    const actHtml = acts.map((a) => `<button class="btn sm">${a}</button>`).join("");
+    const actHtml = acts.map((a) => `<button class="btn sm"${a.act ? ` data-act="${a.act}"` : ""}>${a.label}</button>`).join("");
     return `<div class="card src"><div class="srcicon"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M14 3v4a1 1 0 0 0 1 1h4"/><path d="M5 3h9l5 5v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/></svg></div>
       <div class="srcbody"><div class="srctop"><span class="srcname">${name}</span><span class="tag ${kind}">${kind === "auto" ? "自动" : "手工"}</span><span class="badge ${st}"><span class="hjdot ${dotcls}"></span>${stTxt}</span></div>
       <div class="srcmeta">${codeHtml}<span>${meta}</span></div><div class="srcact">${actHtml}</div></div></div>`;
@@ -656,11 +660,37 @@ export class WorkbenchView extends ItemView {
       case "odin": this.scrapeOdin(); break;
       case "push": this.previewPush(); break;
       case "tenant": new Notice("切换城市（M4 多租户接入）"); break;
+      case "import-file": this.importFile(); break;
       case "dist-add": this.calAddDist(); break;
       case "dist-del": this.calDelDist(parseInt(el?.dataset.i || "-1", 10)); break;
       case "cal-save": this.calSave(); break;
       case "cal-reset": this.calReset(); break;
     }
+  }
+
+  /** 手动导入数据文件（xlsx 5月基准 / csv）：弹原生文件选择 → 写入 vault inbox 目录 → 刷新。 */
+  private importFile() {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".xlsx,.csv";
+    input.style.display = "none";
+    document.body.appendChild(input);
+    input.onchange = async () => {
+      const f = input.files?.[0];
+      input.remove();
+      if (!f) return;
+      try {
+        const ab = await f.arrayBuffer();
+        await this.ensureDir(this.inboxDir);
+        const rel = normalizePath(`${this.inboxDir}/${f.name}`);
+        await this.app.vault.adapter.writeBinary(rel, ab);
+        new Notice(`已导入 ${f.name} → ${this.inboxDir}/，正在刷新…`);
+        this.refresh();
+      } catch (e: any) {
+        new Notice("导入失败：" + (e?.message || e));
+      }
+    };
+    input.click();
   }
 
   // ===== 口径配置交互 =====
