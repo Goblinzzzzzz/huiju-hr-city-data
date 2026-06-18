@@ -542,7 +542,6 @@ export class WorkbenchView extends ItemView {
   <nav class="nav">
     <button class="on" data-p="src"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></svg><span class="nlabel">数据源</span></button>
     <button data-p="cal"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/></svg><span class="nlabel">口径配置</span></button>
-    <button data-p="run"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="m5 3 14 9-14 9z"/></svg><span class="nlabel">运行与校验</span></button>
     <button data-p="out"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg><span class="nlabel">输出与推送</span></button>
     <button data-p="ten"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.9"/></svg><span class="nlabel">租户管理</span></button>
   </nav>
@@ -550,6 +549,8 @@ export class WorkbenchView extends ItemView {
     <section class="panel on" data-p="src">
       <div class="shead"><h2>数据源接入</h2><p>点「刷新数据」载入（缺文件自动用样例演示）</p></div>
       <div id="hjSrc"><div class="note">点击右上角『刷新数据』开始。投递目录：<code>${this.inboxDir}/</code></div></div>
+      <div class="subhead" style="margin-top:18px">数据校验</div>
+      <div id="hjQa"><div class="note">刷新数据后显示勾稽恒等式 / 数据规模等校验结果。</div></div>
     </section>
     <section class="panel" data-p="cal">
       <div class="shead"><h2>口径配置</h2><p>可视化表单为主 · 高级可改 JSON</p></div>
@@ -565,11 +566,6 @@ export class WorkbenchView extends ItemView {
         <button class="btn" data-act="cal-reset">重置为默认</button>
         <span class="note" style="align-self:center">保存后点右上角「刷新数据」生效</span>
       </div>
-    </section>
-    <section class="panel" data-p="run">
-      <div class="shead"><h2>运行与校验</h2><p>取数 → 建模 → 校验，不过不发</p></div>
-      <button class="btn primary runbtn" data-act="run"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m5 3 14 9-14 9z"/></svg>运行流水线</button>
-      <div id="hjQa"><div class="note">点「运行流水线」后显示勾稽/规模等校验结果。</div></div>
     </section>
     <section class="panel" data-p="out">
       <div class="shead"><h2>输出与推送</h2><p>看板是导出的产物，不在插件内渲染</p></div>
@@ -655,7 +651,7 @@ export class WorkbenchView extends ItemView {
 
   private handleAct(act: string, el?: HTMLElement) {
     switch (act) {
-      case "refresh": case "run": this.refresh(); break;
+      case "refresh": this.refresh(); break;
       case "generate": this.generate(); break;
       case "odin": this.scrapeOdin(); break;
       case "push": this.previewPush(); break;

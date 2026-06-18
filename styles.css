@@ -111,8 +111,7 @@ body.theme-dark .hj-leaf { --hj-accent: #2dd4a7; --hj-accent-soft: rgba(45, 212,
 .hj-leaf .json { font-family: var(--hj-mono); font-size: 11.5px; background: var(--hj-bg2); border: 1px solid var(--hj-border); border-radius: var(--hj-radius-sm); padding: 12px; white-space: pre; overflow: auto; color: var(--hj-muted); line-height: 1.6; }
 .hj-leaf .json .k { color: var(--hj-accent); } .hj-leaf .json .s { color: #c2864e; } .hj-leaf .json .n { color: #5b9bd5; }
 
-/* run / stepper */
-.hj-leaf .runbtn { width: 100%; justify-content: center; margin-bottom: 14px; }
+/* stepper */
 .hj-leaf .stepper { display: flex; margin-bottom: 16px; }
 .hj-leaf .step { flex: 1; text-align: center; position: relative; font-size: 11.5px; color: var(--hj-faint); }
 .hj-leaf .step .node { width: 26px; height: 26px; border-radius: 99px; border: 2px solid var(--hj-faint); background: var(--hj-bg1); display: grid; place-items: center; margin: 0 auto 6px; color: var(--hj-faint); position: relative; z-index: 1; }
