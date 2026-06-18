@@ -1,7 +1,7 @@
 {
   "id": "huiju-dashboard",
   "name": "惠居数据看板",
-  "version": "0.6.2",
+  "version": "0.6.3",
   "minAppVersion": "1.0.0",
   "description": "多租户、配置驱动的数据流水线控制台：接入奥丁/线下表，按口径取数建模，生成达标率看板并推送企微。",
   "author": "惠居武汉人力 & 惠居平台人力联合",

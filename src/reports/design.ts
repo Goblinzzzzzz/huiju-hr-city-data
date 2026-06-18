@@ -139,8 +139,9 @@ body{font-family:var(--font-sans);background:var(--canvas);color:var(--ink-700);
 .region-notes .warn{color:var(--warn-700)}
 .region-notes .crit{color:var(--brand-600)}
 .region-notes .low{color:var(--neg-700)}
-/* 可悬停看个人明细的单元格 */
+/* 可悬停看个人明细的单元格 + 浮层 */
 .dt td.hint{cursor:help;text-decoration:underline dotted var(--ink-400);text-underline-offset:3px}
+#hj-tip{position:fixed;z-index:9999;display:none;max-width:360px;pointer-events:none;background:var(--brand-900);color:#fff;padding:8px 11px;border-radius:6px;font-size:11.5px;line-height:1.6;white-space:pre-line;box-shadow:0 8px 28px rgba(11,37,69,.32)}
 
 /* 空态 / 骨架（占位项目） */
 .empty{text-align:center;padding:30px 20px;color:var(--ink-400)}

@@ -37,6 +37,17 @@ const SHELL_JS = `(function(){
       var ok=(!t||row.dataset.tier===t)&&(!c||row.dataset.change===c)&&(!r||row.dataset.roster===r);
       row.style.display=ok?'':'none';});}
   [ft,fc,fr].forEach(function(s){if(s)s.addEventListener('change',applyF)});
+  // 悬停个人明细浮层（position:fixed 跟随光标，不被卡片 overflow:hidden 裁切）
+  var tip=document.createElement('div'); tip.id='hj-tip'; document.body.appendChild(tip);
+  function place(e){var x=e.clientX+14,y=e.clientY+16,w=tip.offsetWidth,h=tip.offsetHeight;
+    if(x+w>window.innerWidth-8)x=e.clientX-w-14; if(y+h>window.innerHeight-8)y=e.clientY-h-16;
+    tip.style.left=Math.max(8,x)+'px'; tip.style.top=Math.max(8,y)+'px';}
+  document.addEventListener('mouseover',function(e){
+    var el=e.target.closest?e.target.closest('[data-tip]'):null;
+    if(!el){return;} tip.textContent=el.getAttribute('data-tip'); tip.style.display='block'; place(e);});
+  document.addEventListener('mousemove',function(e){if(tip.style.display==='block')place(e);});
+  document.addEventListener('mouseout',function(e){
+    var el=e.target.closest?e.target.closest('[data-tip]'):null; if(el)tip.style.display='none';});
   var radios=[].slice.call(document.querySelectorAll('.proj-radio'));
   document.addEventListener('keydown',function(e){
     if(e.key!=='ArrowLeft'&&e.key!=='ArrowRight')return;

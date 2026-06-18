@@ -25,7 +25,7 @@ function flowTable(rows: OverviewRow[], persons?: Person[]): string {
   const mcell = (val: number, cls: string, pred: (p: Person) => boolean) => {
     if (!val) return `<td class="num dim">—</td>`;
     const tip = persons ? persons.filter(pred).map(personTip).join("\n") : "";
-    return tip ? `<td class="num ${cls} hint" title="${esc(tip)}">${val}</td>` : `<td class="num ${cls}">${val}</td>`;
+    return tip ? `<td class="num ${cls} hint" data-tip="${esc(tip)}">${val}</td>` : `<td class="num ${cls}">${val}</td>`;
   };
   const cell = (r: OverviewRow) => {
     const t = r.tier;
