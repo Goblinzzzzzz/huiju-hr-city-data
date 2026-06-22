@@ -143,6 +143,13 @@ body{font-family:var(--font-sans);background:var(--canvas);color:var(--ink-700);
 .dt td.hint{cursor:help;text-decoration:underline dotted var(--ink-400);text-underline-offset:3px}
 #hj-tip{position:fixed;z-index:9999;display:none;max-width:360px;pointer-events:none;background:var(--brand-900);color:#fff;padding:8px 11px;border-radius:6px;font-size:11.5px;line-height:1.6;white-space:pre-line;box-shadow:0 8px 28px rgba(11,37,69,.32)}
 
+/* 薪酬下钻 details */
+.dd-lv,.dd-grp{border:1px solid var(--line-200);border-radius:var(--r-md);margin:8px 0;overflow:hidden}
+.dd-lv>summary{padding:9px 14px;font-weight:600;font-size:13px;cursor:pointer;background:var(--brand-050);color:var(--ink-800)}
+.dd-grp{margin:8px 12px}
+.dd-grp>summary{padding:7px 12px;font-size:12.5px;cursor:pointer;background:var(--surface);color:var(--ink-700)}
+.dd-lv[open]>summary,.dd-grp[open]>summary{border-bottom:1px solid var(--line-100)}
+
 /* 空态 / 骨架（占位项目） */
 .empty{text-align:center;padding:30px 20px;color:var(--ink-400)}
 .empty .ei{width:42px;height:42px;border-radius:10px;background:var(--brand-050);border:1px solid var(--line-200);margin:0 auto 12px;display:flex;align-items:center;justify-content:center;color:var(--brand-500)}

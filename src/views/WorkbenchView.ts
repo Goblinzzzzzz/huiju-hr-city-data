@@ -5,7 +5,9 @@ import { sessionFromCookie, fetchChartList, queryChart, downloadTable } from "..
 import { parseOdinTierMap, odinToTables, type OdinTable } from "../reports/tier/odinSource";
 import type { CurlTemplate } from "../connectors/curl";
 import { computeTier } from "../reports/tier/compute";
-import { exportTierHtml, type TrendEntry } from "../reports/tier/exportHtml";
+import { exportTierHtml, exportDashboard, type TrendEntry } from "../reports/tier/exportHtml";
+import { SAMPLE_COST } from "../reports/cost/sample";
+import type { CostData } from "../reports/cost/model";
 import { buildKpiMarkdown, pushWeChat } from "../push/wechat";
 import { SAMPLE_EXCEL, SAMPLE_CSV, SAMPLE_ROSTER, SAMPLE_CONFIG } from "../reports/tier/sample";
 import { runSql, validateSql, DEFAULT_SQL, type SqlConfig } from "../transforms/sql";
@@ -366,11 +368,25 @@ export class WorkbenchView extends ItemView {
     if (!this.computed) return;
     await this.ensureDir(this.snapDir);
     const trend = await this.buildTrend(this.computed);
-    const html = exportTierHtml(this.computed, { city: "惠居" + this.tenant, month: this.monthPrefix(), trend });
+    const cost = await this.loadCostData();
+    const html = exportDashboard({ city: "惠居" + this.tenant, month: this.monthPrefix(), tier: { data: this.computed, trend }, cost });
     const rel = `${this.snapDir}/档位看板-${this.ts()}.html`; // 时间戳、不覆盖
     await this.app.vault.adapter.write(rel, html);
     new Notice(`看板已生成：${rel}`);
     this.openExternal(rel);
+  }
+
+  /** 读人工成本数据：vault `成本数据.json`（用户按月维护）优先，无则内置合成样例。 */
+  private async loadCostData(): Promise<CostData> {
+    const rel = `${this.dataDir}/成本数据.json`;
+    try {
+      if (await this.app.vault.adapter.exists(rel)) {
+        const o = JSON.parse(await this.app.vault.adapter.read(rel));
+        if (o && o.teamCost) { this.dlog(`成本数据: vault ${rel}`); return o; }
+      }
+    } catch (e: any) { this.dlog(`成本数据解析失败，用内置样例: ${e?.message || e}`); }
+    this.dlog("成本数据: 内置样例（放 成本数据.json 覆盖）");
+    return SAMPLE_COST;
   }
 
   private openExternal(rel: string) {

@@ -4,6 +4,8 @@ import type { TierViewData } from "../../model/canonical";
 import { renderShell } from "../shell";
 import { renderTierPanel, type TrendEntry } from "./render";
 import { renderCostPanel } from "../cost/render";
+import { computeCost } from "../cost/compute";
+import type { CostData } from "../cost/model";
 import { renderAmPanel } from "../am/render";
 
 export type { TrendEntry };
@@ -13,6 +15,7 @@ export interface DashboardInput {
   month: string;
   generatedAt?: number;
   tier?: { data: TierViewData; trend?: TrendEntry[] };
+  cost?: CostData;
 }
 
 const TABS = [
@@ -27,6 +30,7 @@ export function exportDashboard(input: DashboardInput): string {
   const tierPanel = input.tier
     ? renderTierPanel(input.tier.data, { trend: input.tier.trend })
     : `<div style="padding:24px">尚无数据</div>`;
+  const costPanel = input.cost ? renderCostPanel(computeCost(input.cost), input.cost) : renderCostPanel();
   return renderShell({
     brand: "惠居数据看板",
     city: input.city,
@@ -34,7 +38,7 @@ export function exportDashboard(input: DashboardInput): string {
     generatedAt: now,
     fresh: { ok: true, text: "已更新" },
     tabs: TABS,
-    panels: [tierPanel, renderCostPanel(), renderAmPanel()],
+    panels: [tierPanel, costPanel, renderAmPanel()],
   });
 }
 
